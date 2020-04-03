@@ -52,24 +52,24 @@ data = []
 for tgt in os.listdir("dataset"):
     for folder in os.listdir("dataset/" + tgt + "/Uploaded"):
         for filename in os.listdir("dataset/" + tgt + "/Uploaded/" + folder):
-            if not filename == ".DS_Store":
-                # Obtinem imaginea si denumirea
-                picture = []
-                curr_target = matrice_encoding[tgt]
-                image = Image.open("dataset/" + tgt + "/Uploaded/" + folder + "/" + filename)
-                image = image.convert('RGB')
-                image = np.array(image)
-                # Redimensionam imaginea la 28x28x3
-                image = cv2.resize(image, (28, 28))
-                # Normalizare 0-1
-                image = image.astype(np.float32) / 255.0
-                image = torch.from_numpy(image).to(
-                    torch.device("cuda:0" if torch.cuda.is_available() else "cpu"))
-                picture.append(image)
-                # Convertim matricea intr-un tensor
-                curr_target = torch.Tensor([curr_target])
-                picture.append(curr_target)
-                data.append(picture)
+            # Obtinem imaginea si o convertim in binar
+            picture = []
+            curr_target = matrice_encoding[tgt]
+            image = Image.open("dataset/" + tgt + "/Uploaded/" + folder + "/" + filename)
+            image = image.convert('RGB')
+            image = np.array(image)
+            # Redimensionam imaginea la 28x28x3
+            image = cv2.resize(image, (28, 28))
+            # Normalizare 0-1
+            image = image.astype(np.float32) / 255.0
+            image = torch.from_numpy(image).to(
+                torch.device("cuda:0" if torch.cuda.is_available() else "cpu"))
+            picture.append(image)
+            # Convertim echivalentul cuvantului in binar ca tensor si apoi il appenduim la picture
+            curr_target = torch.Tensor([curr_target])
+            picture.append(curr_target)
+            # Astfel fiecare pozitie din vectorul data contine 2 atribute: imaginea ca tensor si numele acesteia tensor
+            data.append(picture)
 
 # Cream un dictionar cu toate caracterele
 caractere = alfabet + simboluri
@@ -95,7 +95,6 @@ def num_chars(dataset, index2char):
     return chars
 
 
-# Amestecam aleator datele
 random.shuffle(data)
 
 # Cream loturi pentru invatare, testare si validare
@@ -103,11 +102,8 @@ batch_size_train = 30
 batch_size_test = 30
 batch_size_validation = 30
 
-# 1600 pentru invatare
 train_dataset = data[:22000]
-# 212 pentru testare
 test_dataset = data[22000:24400]
-# 212 pentru validare
 validation_dataset = data[24400:]
 
 train_loader = torch.utils.data.DataLoader(dataset=train_dataset, batch_size=batch_size_train, shuffle=True)
@@ -119,8 +115,10 @@ validation_loader = torch.utils.data.DataLoader(dataset=validation_dataset, batc
 test_chars = num_chars(test_dataset, index2char)
 
 num = 0
+summ = 0
 for caracter in caractere:
     if caracter in test_chars:
+        summ+=test_chars[caracter]
         num += 1
     else:
         break
@@ -311,21 +309,20 @@ for epoch in range(num_epochs):
     print('Accuracy on the test set: {:.4f}%'.format(correct / len(test_dataset) * 100))
     print()
 
-
 # learning curve function
-def plot_learning_curve(train_losses, validation_losses):
-    # plot the training and validation losses
-    plt.ylabel('Loss')
-    plt.xlabel('Number of Epochs')
-    plt.plot(train_losses, label="training")
-    plt.plot(validation_losses, label="validation")
-    plt.legend(loc=1)
-    plt.show()
+# def plot_learning_curve(train_losses, validation_losses):
+#     plot the training and validation losses
+#     plt.ylabel('Loss')
+#     plt.xlabel('Number of Epochs')
+#     plt.plot(train_losses, label="training")
+#     plt.plot(validation_losses, label="validation")
+#     plt.legend(loc=1)
+#     plt.show()
 
 
 # plot the learning curve
-plt.title("Learning Curve (Loss vs Number of Epochs)")
-plot_learning_curve(train_losses, validation_losses)
+# plt.title("Learning Curve (Loss vs Number of Epochs)")
+# plot_learning_curve(train_losses, validation_losses)
 # input_names = [ "actual_input_1" ] + [ "learned_%d" % i for i in range(16) ]
 # output_names = [ "output1" ]
 

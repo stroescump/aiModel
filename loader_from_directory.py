@@ -108,11 +108,8 @@ batch_size_train = 30
 batch_size_test = 30
 batch_size_validation = 30
 
-# 1600 pentru invatare
 train_dataset = data[:22000]
-# 212 pentru testare
 test_dataset = data[22000:24400]
-# 212 pentru validare
 validation_dataset = data[24400:]
 
 # create the dataloader objects
