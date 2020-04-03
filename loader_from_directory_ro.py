@@ -50,28 +50,26 @@ for simbol in simboluri:
 data = []
 
 for tgt in os.listdir("dataset"):
-    if not tgt == ".DS_Store":
-        for folder in os.listdir("dataset/" + tgt + "/Uploaded"):
-            if not folder == ".DS_Store":
-                for filename in os.listdir("dataset/" + tgt + "/Uploaded/" + folder):
-                    if not filename == ".DS_Store":
-                        # Obtinem imaginea si denumirea
-                        picture = []
-                        curr_target = matrice_encoding[tgt]
-                        image = Image.open("dataset/" + tgt + "/Uploaded/" + folder + "/" + filename)
-                        image = image.convert('RGB')
-                        image = np.array(image)
-                        # Redimensionam imaginea la 28x28x3
-                        image = cv2.resize(image, (28, 28))
-                        # Normalizare 0-1
-                        image = image.astype(np.float32) / 255.0
-                        image = torch.from_numpy(image).to(
-                            torch.device("cuda:0" if torch.cuda.is_available() else "cpu"))
-                        picture.append(image)
-                        # Convertim matricea intr-un tensor
-                        curr_target = torch.Tensor([curr_target])
-                        picture.append(curr_target)
-                        data.append(picture)
+    for folder in os.listdir("dataset/" + tgt + "/Uploaded"):
+        for filename in os.listdir("dataset/" + tgt + "/Uploaded/" + folder):
+            if not filename == ".DS_Store":
+                # Obtinem imaginea si denumirea
+                picture = []
+                curr_target = matrice_encoding[tgt]
+                image = Image.open("dataset/" + tgt + "/Uploaded/" + folder + "/" + filename)
+                image = image.convert('RGB')
+                image = np.array(image)
+                # Redimensionam imaginea la 28x28x3
+                image = cv2.resize(image, (28, 28))
+                # Normalizare 0-1
+                image = image.astype(np.float32) / 255.0
+                image = torch.from_numpy(image).to(
+                    torch.device("cuda:0" if torch.cuda.is_available() else "cpu"))
+                picture.append(image)
+                # Convertim matricea intr-un tensor
+                curr_target = torch.Tensor([curr_target])
+                picture.append(curr_target)
+                data.append(picture)
 
 # Cream un dictionar cu toate caracterele
 caractere = alfabet + simboluri
