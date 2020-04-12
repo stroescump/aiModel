@@ -6,12 +6,14 @@ import matplotlib.pyplot as plt
 import numpy as np
 import torch
 import torch.nn as nn
+import torchvision
 from PIL import Image
 from sklearn.metrics import confusion_matrix
 from final_model.resources import plot_cmatrix
+from torch.utils.tensorboard import SummaryWriter
+from itertools import product
 
 torch.cuda.init()
-# print(torch.cuda.is_available())
 nvcc_args = [
     '-gencode', 'arch=compute_30,code=sm_30',
     '-gencode', 'arch=compute_35,code=sm_35',
@@ -23,6 +25,12 @@ nvcc_args = [
     '-gencode', 'arch=compute_70,code=sm_70',
     '-gencode', 'arch=compute_75,code=sm_75'
 ]
+
+parameters = dict(
+    lr=[.0001],
+    batch_size=[30],
+    shuffle=[True]
+)
 
 alfabet = list(string.ascii_lowercase)
 matrice_encoding = {}
@@ -99,22 +107,6 @@ def num_chars(dataset, index2char):
 
 random.shuffle(data)
 
-# Cream loturi pentru invatare, testare si validare
-batch_size_train = 30
-batch_size_test = 30
-batch_size_validation = 30
-
-train_dataset = data[:22000]
-test_dataset = data[22000:24400]
-validation_dataset = data[24400:]
-
-train_loader = torch.utils.data.DataLoader(dataset=train_dataset, batch_size=batch_size_train, shuffle=True)
-# train_loader1 are parametrul Shuffle setat pe False pentru a ajuta la alcatuirea unei matrici de confuzie
-train_loader1 = torch.utils.data.DataLoader(dataset=train_dataset, batch_size=batch_size_train, shuffle=False)
-test_loader = torch.utils.data.DataLoader(dataset=test_dataset, batch_size=batch_size_test, shuffle=False)
-validation_loader = torch.utils.data.DataLoader(dataset=validation_dataset, batch_size=batch_size_validation,
-                                                shuffle=True)
-
 
 # Verificam integritatea datasetului dpdv al nr.de caractere
 # test_chars = num_chars(test_dataset, index2char)
@@ -136,7 +128,7 @@ class CNN(nn.Module):
         self.block1 = nn.Sequential(
             # 3x28x28
             nn.Conv2d(in_channels=3,
-                      out_channels=20,
+                      out_channels=30,
                       kernel_size=5,
                       stride=1,
                       padding=2),
@@ -147,7 +139,7 @@ class CNN(nn.Module):
         )
         # 16x14x14
         self.block2 = nn.Sequential(
-            nn.Conv2d(in_channels=20,
+            nn.Conv2d(in_channels=30,
                       out_channels=40,
                       kernel_size=5,
                       stride=1,
@@ -181,18 +173,17 @@ model.to(device)
 
 @torch.no_grad()
 def get_all_preds(modelCNN, loader):
+    auxLabelsTensor = 0
     all_preds = torch.tensor([]).cuda()
-    # auxLabelsTensor = torch.tensor([[[]]]).cuda()
     for batch in loader:
         images, auxLabelsTensor = batch
         images = images.permute(0, 3, 1, 2)
-        # loadLabelsInThisVariable = torch.cat((loadLabelsInThisVariable, auxLabelsTensor))
         preds = modelCNN(images)
         all_preds = torch.cat(
             (all_preds, preds),
             dim=0
         ).cuda()
-    return all_preds
+    return all_preds, auxLabelsTensor
 
 
 def getAllLabelsAsTensor(inputDataTrainingTensor):
@@ -206,25 +197,22 @@ def getAllLabelsAsTensor(inputDataTrainingTensor):
 
 # TODO : Seems to be working but I still think there s something off with this func.
 def get_correct_predictions(trained_output, inputLabelTensor):
-    correct1 = torch.FloatTensor().cuda()
     trained_output = trained_output.argmax(dim=1)
-    correct1 = trained_output.eq(labelTensor).sum()
+    correct1 = trained_output.eq(inputLabelTensor).sum()
     return correct1
 
 
 def create_and_display_confusion_matrix():
-    labelTensor = getAllLabelsAsTensor(train_loader1).to(device)
-    train_predictions = get_all_preds(model, train_loader1).to(device)
+    # labelTensor = getAllLabelsAsTensor(train_loader1).to(device)
+    train_predictions, labelTensor = get_all_preds(model, train_loader1).to(device)
 
     labelTensor = torch.argmax(labelTensor, dim=1).to(device)
     stackedTensor = torch.stack((labelTensor, train_predictions.argmax(dim=1)), dim=1)
     conf_matrix = torch.zeros(37, 37, dtype=torch.int32)
-    # print(conf_matrix)
 
     for pair in stackedTensor:
         true_label, predicted_label = pair.tolist()
         conf_matrix[true_label, predicted_label] = conf_matrix[true_label, predicted_label] + 1
-    print(conf_matrix)
 
     namesForCMatrix = (
         'a', 'b', 'c', 'd', 'e', 'f', 'g', 'h', 'i', 'j', 'k', 'l', 'm', 'n', 'o', 'p', 'q', 'r', 's', 't', 'u', 'v',
@@ -235,146 +223,182 @@ def create_and_display_confusion_matrix():
     plot_cmatrix.plot_confusion_matrix(conf_matrix, namesForCMatrix)
 
 
-# torch.sum(torch.eq(inputLabelTensor, trained_output))
-
 # Pre-verificare a modelului
 print(model)
 print("# parameter: ", sum([param.nelement() for param in model.parameters()]))
-
+param_values = [v for v in parameters.values()]
 # Rata de invatare
-learning_rate = 0.001
+for learning_rate, batch_size, shuffle in product(*param_values):
 
-# Using a variable to store the cross entropy method
-criterion = nn.CrossEntropyLoss().cuda()
+    # list of all train_losses
+    train_losses = []
 
-# Using a variable to store the optimizer
-optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate)
+    # list of all validation losses
+    validation_losses = []
 
-# list of all train_losses 
-train_losses = []
+    # Cream loturi pentru invatare, testare si validare
+    batch_size_train = batch_size
+    batch_size_test = batch_size
+    batch_size_validation = batch_size
 
-# list of all validation losses 
-validation_losses = []
+    train_dataset = data[:22000]
+    test_dataset = data[22000:24400]
+    validation_dataset = data[24400:]
 
-# for loop that iterates over all the epochs
-num_epochs = 5
-for epoch in range(num_epochs):
+    train_loader = torch.utils.data.DataLoader(dataset=train_dataset, batch_size=batch_size_train, shuffle=True)
+    test_loader = torch.utils.data.DataLoader(dataset=test_dataset, batch_size=batch_size_test, shuffle=False)
+    validation_loader = torch.utils.data.DataLoader(dataset=validation_dataset, batch_size=batch_size_validation,
+                                                    shuffle=True)
 
-    # variables to store/keep track of the loss and number of iterations
-    train_loss = 0
-    num_iter_train = 0
+    comment = f' batch_size={batch_size} lr={learning_rate} shuffle={shuffle}'
+    # learning_rate = 0.001
 
-    # train the model
-    model.train()
-    for batch in train_loader:
-        images, labels = batch
-        # Permutam tensorul pentru a corespunde cu inputul modelului [batch_size,channel,width,height]
-        images = images.permute(0, 3, 1, 2)
-        outputs = model(images)
-        # Modelam tensorul ce contine labels, facem squeeze pentru a putea avea dimensiunea asteptata de LossFunc.
-        labels = labels.view(-1, 37)
-        labelsConverted = torch.argmax(labels, dim=1).cuda()
-        # Calculam functia de cost
-        loss = criterion(outputs, labelsConverted).cuda()
-        # Backward (computes all the gradients)
-        optimizer.zero_grad()
-        loss.backward()
-        # Optimize
-        # Loops through all parameters and updates weights by using the gradients
-        # Takes steps backwards to optimize (to reach the minimum weight)
-        optimizer.step()
-        # Update the training loss and number of iterations
-        train_loss += loss.data
-        num_iter_train += 1
+    # Using a variable to store the cross entropy method
+    criterion = nn.CrossEntropyLoss().cuda()
 
-    print('Epoch: {}'.format(epoch + 1))
-    print('Training Loss: {:.4f}'.format(train_loss / num_iter_train))
-    # append training loss over all the epochs
-    train_losses.append(train_loss / num_iter_train)
+    # Using a variable to store the optimizer
+    optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate)
 
-# Uncomment the following line to plot the confusion matrix corresponding to a training session
-create_and_display_confusion_matrix()
+    tensorBoard = SummaryWriter(comment=comment)
+    images, _ = next(iter(train_loader))
+    images = images.permute(0, 3, 1, 2)
+    grid = torchvision.utils.make_grid(images)
 
-# TODO: Do not delete these lines, they account for the evaluation part of the model
+    tensorBoard.add_image('images', grid, dataformats='CWH')
+    tensorBoard.add_graph(model, images)
 
-# evaluate the model
-# model.eval()
+    # for loop that iterates over all the epochs
+    num_epochs = 100
+    for epoch in range(num_epochs):
 
-# # variables to store/keep track of the loss and number of iterations
-# validation_loss = 0
-# num_iter_validation = 0
-#
-# # Iterate over validation_loader
-# for i, (images, labels) in enumerate(validation_loader):
-#     # need to permute so that the images are of size 3x28x28
-#     # essential to be able to feed images into the model
-#     images = images.permute(0, 3, 1, 2)
-#
-#     # Forward, get output
-#     outputs = model(images)
-#
-#     # convert the labels from one hot encoding vectors to integer values
-#     labels = labels.view(-1, 37)
-#     y_true = torch.argmax(labels, 1).to(device)
-#
-#     # calculate the validation loss
-#     loss = criterion(outputs, y_true).to(device)
-#
-#     # update the training loss and number of iterations
-#     validation_loss += loss.data
-#     num_iter_validation += 1
-#
-# print('Validation Loss: {:.4f}'.format(validation_loss / num_iter_validation))
-# # append all validation_losses over all the epochs
-# validation_losses.append(validation_loss / num_iter_validation)
-#
-# num_iter_test = 0
-# correct = 0
-#
-# # Iterate over test_loader
-# for images, labels in test_loader:
-#     images = images.permute(0, 3, 1, 2)
-#
-#     # Forward
-#     outputs = model(images)
-#
-#     # convert the labels from one hot encoding vectors into integer values
-#     labels = labels.view(-1, 37)
-#     y_true = torch.argmax(labels, 1).to(device)
-#
-#     # find the index of the prediction
-#     y_pred = torch.argmax(outputs, 1).type('torch.FloatTensor').to(device)
-#
-#     # convert to FloatTensor
-#     y_true = y_true.type('torch.FloatTensor').to(device)
-#
-#     # find the mean difference of the comparisons
-#     correct += torch.sum(torch.eq(y_true, y_pred).type('torch.FloatTensor')).to(device)
-#
-# x = (correct / len(test_dataset) * 100)
-# print(correct)
-# nume = str('{:.4f}'.format(x)) + "model_1_final_highAccuracy.pth"
-#
-# if x > 99.89:
-#     torch.save(model.state_dict(), nume)
-#     print('Saved!')
-#
-# print('Accuracy on the test set: {:.4f}%'.format(correct / len(test_dataset) * 100))
-# print()
+        # variables to store/keep track of the loss and number of iterations
+        train_loss = 0
+        num_iter_train = 0
+        total_correct = 0
 
-# learning curve function
-# def plot_learning_curve(train_losses, validation_losses):
-#     plot the training and validation losses
-#     plt.ylabel('Loss')
-#     plt.xlabel('Number of Epochs')
-#     plt.plot(train_losses, label="training")
-#     plt.plot(validation_losses, label="validation")
-#     plt.legend(loc=1)
-#     plt.show()
+        # train the model
+        model.train()
+        for batch in train_loader:
+            images, labels = batch
+            # Permutam tensorul pentru a corespunde cu inputul modelului [batch_size,channel,width,height]
+            images = images.permute(0, 3, 1, 2)
+            outputs = model(images)
+            # Modelam tensorul ce contine labels, facem squeeze pentru a putea avea dimensiunea asteptata de LossFunc.
+            labels = labels.view(-1, 37)
+            labelsConverted = torch.argmax(labels, dim=1).cuda()
+            # Calculam functia de cost
+            loss = criterion(outputs, labelsConverted).cuda()
+            # Backward (computes all the gradients)
+            optimizer.zero_grad()
+            loss.backward()
+            # Optimize
+            # Loops through all parameters and updates weights by using the gradients
+            # Takes steps backwards to optimize (to reach the minimum weight)
+            optimizer.step()
+            # Update the training loss and number of iterations
+            train_loss += loss.data
+            num_iter_train += 1
+            total_correct += get_correct_predictions(outputs, labelsConverted)
 
-# plot the learning curve
-# plt.title("Learning Curve (Loss vs Number of Epochs)")
-# plot_learning_curve(train_losses, validation_losses)
+        tensorBoard.add_scalar('Loss', train_loss, epoch)
+        tensorBoard.add_scalar('Number correct', total_correct, epoch)
+        tensorBoard.add_scalar('Accuracy', total_correct.item() / len(train_dataset), epoch)
+
+        tensorBoard.add_histogram('conv1.bias', model.block1[0].bias, epoch)
+        tensorBoard.add_histogram('conv1.weight', model.block1[0].weight, epoch)
+        tensorBoard.add_histogram('conv1.weight.grad', model.block1[0].weight.grad, epoch)
+        tensorBoard.close()
+        print('Epoch: {}'.format(epoch + 1))
+        print('Training Loss: {:.4f}'.format(train_loss / num_iter_train))
+        print('Correct predictions: ', total_correct.item())
+        # append training loss over all the epochs
+        train_losses.append(train_loss / num_iter_train)
+
+    # TODO: Uncomment the following line to plot the confusion matrix corresponding to a training session
+    # create_and_display_confusion_matrix()
+
+    # TODO: Do not delete these lines, they account for the evaluation part of the model
+
+        # evaluate the model
+        model.eval()
+
+        # variables to store/keep track of the loss and number of iterations
+        validation_loss = 0
+        num_iter_validation = 0
+
+        # Iterate over validation_loader
+        for i, (images, labels) in enumerate(validation_loader):
+            # need to permute so that the images are of size 3x28x28
+            # essential to be able to feed images into the model
+            images = images.permute(0, 3, 1, 2)
+
+            # Forward, get output
+            outputs = model(images)
+
+            # convert the labels from one hot encoding vectors to integer values
+            labels = labels.view(-1, 37)
+            y_true = torch.argmax(labels, 1).to(device)
+
+            # calculate the validation loss
+            loss = criterion(outputs, y_true).to(device)
+
+            # update the training loss and number of iterations
+            validation_loss += loss.data
+            num_iter_validation += 1
+
+        print('Validation Loss: {:.4f}'.format(validation_loss / num_iter_validation))
+        # append all validation_losses over all the epochs
+        validation_losses.append(validation_loss / num_iter_validation)
+
+        num_iter_test = 0
+        correct = 0
+
+        # Iterate over test_loader
+        for images, labels in test_loader:
+            images = images.permute(0, 3, 1, 2)
+
+            # Forward
+            outputs = model(images)
+
+            # convert the labels from one hot encoding vectors into integer values
+            labels = labels.view(-1, 37)
+            y_true = torch.argmax(labels, 1).to(device)
+
+            # find the index of the prediction
+            y_pred = torch.argmax(outputs, 1).type('torch.FloatTensor').to(device)
+
+            # convert to FloatTensor
+            y_true = y_true.type('torch.FloatTensor').to(device)
+
+            # find the mean difference of the comparisons
+            correct += torch.sum(torch.eq(y_true, y_pred).type('torch.FloatTensor')).to(device)
+
+        x = (correct / len(test_dataset) * 100)
+        nume = str('{:.4f}'.format(x)) + "model_1_final_highAccuracy.pth"
+
+        if x > 99.89:
+            torch.save(model.state_dict(), nume)
+            print('Saved!')
+
+        print('Accuracy on the test set: {:.4f}%'.format(correct / len(test_dataset) * 100))
+
+    # learning curve function
+
+
+def plot_learning_curve(train_losses, validation_losses):
+    # plot the training and validation losses
+    plt.ylabel('Loss')
+    plt.xlabel('Number of Epochs')
+    plt.plot(train_losses, label="training")
+    plt.plot(validation_losses, label="validation")
+    plt.legend(loc=1)
+    plt.show()
+
+    # plot the learning curve
+    plt.title("Learning Curve (Loss vs Number of Epochs)")
+
+
+plot_learning_curve(train_losses, validation_losses)
 # input_names = [ "actual_input_1" ] + [ "learned_%d" % i for i in range(16) ]
 # output_names = [ "output1" ]
 

@@ -206,7 +206,7 @@ train_losses = []
 validation_losses = []
 
 # for loop that iterates over all the epochs
-num_epochs = 200
+num_epochs = 2
 for epoch in range(num_epochs):
 
     # variables to store/keep track of the loss and number of iterations
